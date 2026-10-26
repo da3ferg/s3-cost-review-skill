@@ -22,6 +22,7 @@ PRICE_IA_GB = 0.0125
 PRICE_MONITORING_PER_1000 = 0.0025
 
 STANDARD_TYPES = {"StandardStorage"}
+UPLOAD_RULE = {"ID": "abort-unfinished-uploads", "Status": "Enabled", "Filter": {}, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}
 
 
 def aws(args, profile=None, region=None, ignore=()):
@@ -103,14 +104,15 @@ def assess(b, threshold_gb=10.0):
 
     if not any("AbortIncompleteMultipartUpload" in r for r in enabled):
         stale = b["stale_uploads"]
-        detail = "No AbortIncompleteMultipartUpload rule, so parts of uploads that never finished are billed as storage."
         if stale:
-            detail += f" {len(stale)} unfinished upload(s) older than 7 days found now; the oldest started {max(stale)} days ago."
-        elif not b["uploads_readable"]:
-            detail += " The role could not list multipart uploads, so none were counted."
-        findings.append(("uploads", "Unfinished uploads are never cleaned up", detail,
-                         {"ID": "abort-unfinished-uploads", "Status": "Enabled", "Filter": {},
-                          "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}))
+            detail = ("No AbortIncompleteMultipartUpload rule, so parts of uploads that never finished are billed as storage. "
+                      f"{len(stale)} unfinished upload(s) older than 7 days found now; the oldest started {max(stale)} days ago.")
+        elif b["uploads_readable"]:
+            detail = "No AbortIncompleteMultipartUpload rule. No stale uploads today, so this costs nothing yet; the rule stops the next one."
+        else:
+            detail = "No AbortIncompleteMultipartUpload rule, and the role could not list multipart uploads, so none were counted."
+        findings.append(("uploads" if stale or not b["uploads_readable"] else "uploads-hygiene",
+                         "Unfinished uploads are never cleaned up", detail, UPLOAD_RULE))
 
     standard = sum(v for k, v in b["sizes"].items() if k in STANDARD_TYPES)
     has_transition = any(r.get("Transitions") for r in enabled)
@@ -159,12 +161,21 @@ def report(account, buckets, bill, months, threshold_gb):
     out += ["", "## Findings", ""]
     if not any(f for _, f in all_findings):
         out.append("None. Every bucket expires old versions, aborts unfinished uploads, and either tiers its data or is under the size threshold.")
+    hygiene = []
     for b, findings in all_findings:
         for key, title, detail, rule in findings:
+            if key == "uploads-hygiene":
+                hygiene.append(b["name"])
+                continue
             out += [f"### {b['name']}: {title}", "", detail, ""]
             if rule:
                 out += ["Proposed lifecycle rule (not applied; add it to the bucket's existing rules, never replace them):", "",
                         "```json", json.dumps(rule, indent=2), "```", ""]
+    if hygiene:
+        out += ["### Buckets with no abort rule and no stale uploads today", "",
+                "Nothing is billed for this yet. Adding the rule below to each of them stops the next failed upload from sitting there:", ""]
+        out += [f"- {name}" for name in hygiene]
+        out += ["", "```json", json.dumps(UPLOAD_RULE, indent=2), "```", ""]
     out += ["## S3 bill by usage type", ""]
     if bill is None:
         out.append("Cost Explorer could not be read (no ce:GetCostAndUsage permission, or Cost Explorer is not enabled on this account).")
@@ -219,6 +230,11 @@ def test():
     found = assess(small)
     assert [f[0] for f in found] == ["uploads"], found
     assert "could not list" in found[0][2]
+
+    quiet = dict(small, uploads_readable=True)
+    assert [f[0] for f in assess(quiet)] == ["uploads-hygiene"]
+    quiet_text = report("1", [quiet], None, 0, 10.0)
+    assert "no stale uploads today" in quiet_text and "### b: Unfinished" not in quiet_text
 
     ia_only = dict(base, versioning="Disabled", sizes={"StandardIAStorage": 500 * 1024 ** 3}, rules=[
         {"Status": "Enabled", "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}}])
