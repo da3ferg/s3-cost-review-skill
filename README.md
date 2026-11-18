@@ -10,7 +10,7 @@ It checks every bucket for the three settings behind most S3 overspend on busine
 | Unfinished uploads are never cleaned up | No `AbortIncompleteMultipartUpload` rule, stale uploads counted | Abort after 7 days |
 | Everything pays the Standard rate | Large Standard footprint, no lifecycle transition | Intelligent-Tiering for objects over 128 KB, with the saving shown as a ceiling |
 
-It also prints three months of the S3 bill by usage type from Cost Explorer, so the reader sees which line the money is in before touching a bucket.
+It also prints three months of the S3 bill by usage type from Cost Explorer, so the reader sees which line the money is in before touching a bucket. For what each of those lines costs, with three worked monthly bills, see [Amazon S3 pricing and costs, charge by charge](https://bucketdesk.com/blog/amazon-s3-pricing-for-business-file-storage).
 
 ## Install
 
